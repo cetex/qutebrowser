@@ -350,6 +350,7 @@ qt.chromium.lifecycle_state.enabled:
   default: true
   backend: QtWebEngine
   # yamllint disable rule:line-length
+  supports_pattern: true
   desc: >-
     Use recommended page lifecycle state.
 
@@ -371,15 +372,20 @@ qt.chromium.lifecycle_state.enabled:
 qt.chromium.lifecycle_state.freeze_delay:
   type:
     name: Int
-    minval: 0
+    minval: -1
     maxval: maxint
   default: 30_000
   backend: QtWebEngine
+  supports_pattern: true
   desc: >-
     The amount of time (in milliseconds) to wait before transitioning a page to
     the frozen lifecycle state.
     This is a low-CPU state, where most DOM event processing, JavaScript
     execution, and other tasks are suspended.
+
+    Set to -1 to never freeze. Note that a page that is never frozen is also
+    never discarded, since discarding follows freezing. Useful per-pattern for
+    chat apps that should keep running in the background.
 
 qt.chromium.lifecycle_state.discard_delay:
   type:
@@ -388,6 +394,7 @@ qt.chromium.lifecycle_state.discard_delay:
     maxval: maxint
   default: -1
   backend: QtWebEngine
+  supports_pattern: true
   desc: >-
     The amount of time (in milliseconds) to wait before transitioning a page to
     the discarded lifecycle state.
