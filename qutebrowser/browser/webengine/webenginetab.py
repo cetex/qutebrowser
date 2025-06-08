@@ -1751,14 +1751,15 @@ class WebEngineTab(browsertab.AbstractTab):
         If a transition into `state` is already schedule, do nothing.
         If `state` is `None`, cancel any scheduled transition.
         """
+        url = self.url() if self.url().isValid() else None
         timers = {
             QWebEnginePage.LifecycleState.Frozen: (
                 self._lifecycle_timer_freeze,
-                config.val.qt.chromium.lifecycle_state.freeze_delay,
+                config.instance.get('qt.chromium.lifecycle_state.freeze_delay', url=url),
             ),
             QWebEnginePage.LifecycleState.Discarded: (
                 self._lifecycle_timer_discard,
-                config.val.qt.chromium.lifecycle_state.discard_delay,
+                config.instance.get('qt.chromium.lifecycle_state.discard_delay', url=url),
             ),
         }
 
@@ -1786,7 +1787,8 @@ class WebEngineTab(browsertab.AbstractTab):
             self._schedule_lifecycle_transition(None)
             return
 
-        disabled = not config.val.qt.chromium.lifecycle_state.enabled
+        url = self.url() if self.url().isValid() else None
+        disabled = not config.instance.get('qt.chromium.lifecycle_state.enabled', url=url)
 
         if recommended_state == QWebEnginePage.LifecycleState.Active:
             self._schedule_lifecycle_transition(None)
