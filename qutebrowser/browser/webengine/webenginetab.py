@@ -1755,11 +1755,11 @@ class WebEngineTab(browsertab.AbstractTab):
         timers = {
             QWebEnginePage.LifecycleState.Frozen: (
                 self._lifecycle_timer_freeze,
-                config.instance.get('qt.chromium.lifecycle_state.freeze_delay', url=url),
+                config.instance.get('content.lifecycle.freeze_delay', url=url),
             ),
             QWebEnginePage.LifecycleState.Discarded: (
                 self._lifecycle_timer_discard,
-                config.instance.get('qt.chromium.lifecycle_state.discard_delay', url=url),
+                config.instance.get('content.lifecycle.discard_delay', url=url),
             ),
         }
 
@@ -1788,7 +1788,7 @@ class WebEngineTab(browsertab.AbstractTab):
             return
 
         url = self.url() if self.url().isValid() else None
-        disabled = not config.instance.get('qt.chromium.lifecycle_state.enabled', url=url)
+        disabled = not config.instance.get('content.lifecycle.enabled', url=url)
 
         if recommended_state == QWebEnginePage.LifecycleState.Active:
             self._schedule_lifecycle_transition(None)
