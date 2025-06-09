@@ -1992,9 +1992,9 @@ Feature: Tab management
 
     @qt>=6.5
     Scenario: Lifecycle change on tab switch
-        When I set qt.chromium.lifecycle_state.enabled to true
-        And I set qt.chromium.lifecycle_state.freeze_delay to 0
-        And I set qt.chromium.lifecycle_state.discard_delay to 0
+        When I set content.lifecycle.enabled to true
+        And I set content.lifecycle.freeze_delay to 0
+        And I set content.lifecycle.discard_delay to 0
         And I open about:blank?1
         And I open about:blank?2 in a new tab
         And I run :tab-prev
