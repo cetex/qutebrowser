@@ -177,9 +177,9 @@
 |<<content.javascript.log_message.levels,content.javascript.log_message.levels>>|Javascript message sources/levels to show in the qutebrowser UI.
 |<<content.javascript.modal_dialog,content.javascript.modal_dialog>>|Use the standard JavaScript modal dialog for `alert()` and `confirm()`.
 |<<content.javascript.prompt,content.javascript.prompt>>|Show javascript prompts.
-|<<content.lifecycle.discard_delay,content.lifecycle.discard_delay>>|The amount of time (in milliseconds) to wait before transitioning a page to the discarded lifecycle state. This state is an extreme resource-saving state, where the browsing context of the web view is discarded and the renderer process is shut down. Resource usage is therefore reduced to near-zero. The web page is automatically reloaded when needed.
-|<<content.lifecycle.enabled,content.lifecycle.enabled>>|Use recommended page lifecycle state.
-|<<content.lifecycle.freeze_delay,content.lifecycle.freeze_delay>>|The amount of time (in milliseconds) to wait before transitioning a page to the frozen lifecycle state. This is a low-CPU state, where most DOM event processing, JavaScript execution, and other tasks are suspended.
+|<<content.lifecycle.discard_delay,content.lifecycle.discard_delay>>|Delay (in milliseconds) before discarding the page, reloads on focus. -1 to disable. Frees resources by discarding the browser context and renderer. Page must be frozen before it can be discarded.
+|<<content.lifecycle.enabled,content.lifecycle.enabled>>|Use the lifecycle state (freeze/discard) for each page recommended by QtWebEngine (Chromium), after the delays configured in `content.lifecycle.freeze_delay` and `content.lifecycle.discard_delay`.
+|<<content.lifecycle.freeze_delay,content.lifecycle.freeze_delay>>|Delay (in milliseconds) before freezing the page, resumes on focus. -1 to disable. Stops javascript execution, rendering and event processing.
 |<<content.local_content_can_access_file_urls,content.local_content_can_access_file_urls>>|Allow locally loaded documents to access other local URLs.
 |<<content.local_content_can_access_remote_urls,content.local_content_can_access_remote_urls>>|Allow locally loaded documents to access remote URLs.
 |<<content.local_storage,content.local_storage>>|Enable support for HTML 5 local storage and Web SQL.
@@ -2462,8 +2462,7 @@ Default: +pass:[true]+
 
 [[content.lifecycle.discard_delay]]
 === content.lifecycle.discard_delay
-The amount of time (in milliseconds) to wait before transitioning a page to the discarded lifecycle state. This state is an extreme resource-saving state, where the browsing context of the web view is discarded and the renderer process is shut down. Resource usage is therefore reduced to near-zero. The web page is automatically reloaded when needed.
-Set to -1 to disable this state.
+Delay (in milliseconds) before discarding the page, reloads on focus. -1 to disable. Frees resources by discarding the browser context and renderer. Page must be frozen before it can be discarded.
 
 This setting supports link:configuring{outfilesuffix}#patterns[URL patterns].
 
@@ -2475,12 +2474,7 @@ Default: +pass:[-1]+
 
 [[content.lifecycle.enabled]]
 === content.lifecycle.enabled
-Use recommended page lifecycle state.
-This puts webpages into one of three lifecycle states: active, frozen, or discarded. Using the recommended lifecycle state lets the browser use less resources by freezing or discarding web views when it's safe to do so.
-This results in significant battery life savings.
-Ongoing page activity is taken into account when determining the recommended lifecycle state, as to not disrupt your browsing.
-This feature is only available on QtWebEngine 6.5+. On older versions this setting is ignored.
-See the Qt documentation for more details: https://doc.qt.io/qt-6/qtwebengine-features.html#page-lifecycle-api
+Use the lifecycle state (freeze/discard) for each page recommended by QtWebEngine (Chromium), after the delays configured in `content.lifecycle.freeze_delay` and `content.lifecycle.discard_delay`.
 
 This setting supports link:configuring{outfilesuffix}#patterns[URL patterns].
 
@@ -2492,8 +2486,7 @@ Default: +pass:[true]+
 
 [[content.lifecycle.freeze_delay]]
 === content.lifecycle.freeze_delay
-The amount of time (in milliseconds) to wait before transitioning a page to the frozen lifecycle state. This is a low-CPU state, where most DOM event processing, JavaScript execution, and other tasks are suspended.
-Set to -1 to never freeze. Note that a page that is never frozen is also never discarded, since discarding follows freezing. Useful per-pattern for chat apps that should keep running in the background.
+Delay (in milliseconds) before freezing the page, resumes on focus. -1 to disable. Stops javascript execution, rendering and event processing.
 
 This setting supports link:configuring{outfilesuffix}#patterns[URL patterns].
 
