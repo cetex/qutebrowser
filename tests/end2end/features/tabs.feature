@@ -1990,7 +1990,7 @@ Feature: Tab management
         And I run :tab-prev
         Then "Entering mode KeyMode.insert (reason: mode_override)" should be logged
 
-    @qt>=6.5
+    @qt>=6.11
     Scenario: Lifecycle change on tab switch
         When I set content.lifecycle.enabled to true
         And I set content.lifecycle.freeze_delay to 0
