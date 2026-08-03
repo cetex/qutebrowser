@@ -361,6 +361,7 @@ Feature: Saving and loading sessions
 
   # https://github.com/qutebrowser/qutebrowser/issues/7696
   @qtwebkit_skip
+  @qt>=6.6
   Scenario: Saving session with an empty download tab
     When I open data/downloads/downloads.html
     And I run :click-element --force-event -t tab id download
@@ -374,6 +375,7 @@ Feature: Saving and loading sessions
       windows:
         - tabs:
           - history:
+            - url: about:blank
             - active: true
               title: Simple downloads
               url: http://localhost:*/data/downloads/downloads.html
@@ -450,6 +452,29 @@ Feature: Saving and loading sessions
   Scenario: Loading a session which doesn't exist
     When I run :session-load inexistent_session
     Then the error "Session inexistent_session not found!" should be shown
+
+  # https://github.com/qutebrowser/qutebrowser/issues/5359
+  # Below 6.6, history restore falls back to a single-URL load, so
+  # back/forward history doesn't survive the round trip.
+  @qt>=6.6
+  Scenario: Back/forward history survives a session save/load round trip
+    When I open data/numbers/1.txt
+    And I open data/numbers/2.txt
+    And I run :session-save history_roundtrip
+    And I run :session-load --clear history_roundtrip
+    And I wait until data/numbers/2.txt is loaded
+    And I run :back
+    And I wait until data/numbers/1.txt is loaded
+    Then the session should look like:
+      """
+      windows:
+        - tabs:
+            - history:
+              - url: about:blank
+              - active: true
+                url: http://localhost:*/data/numbers/1.txt
+              - url: http://localhost:*/data/numbers/2.txt
+      """
 
 
   # Test load/save of pinned tabs

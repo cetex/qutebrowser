@@ -657,18 +657,31 @@ class WebEngineHistoryPrivate(browsertab.AbstractHistoryPrivate):
         self._tab.load_url(url)
 
     def load_items(self, items):
-        self._load_items_workaround(items)
+        """Load session items via QWebEngineHistory deserialization."""
+        if not items:
+            return
 
-    def _load_items_proper(self, items):
-        """Load session items properly.
+        # QtWebEngine 6.5: Back/forward navigations in a restored PageState
+        # are broken, use legacy restore.
+        if version.qtwebengine_versions().webengine < utils.VersionNumber(6, 6):
+            self._load_items_workaround(items)
+            return
 
-        Currently unused, but should be revived.
-        """
-        if items:
-            self._tab.before_load_started.emit(items[-1].url)
-
+        # serialize() validates that there is exactly one active item.
         stream, _data, cur_data = tabhistory.serialize(items)
+        url = next(item.url for item in items if item.active)
+        self._tab.before_load_started.emit(url)
         qtutils.deserialize_stream(stream, self._history)
+
+        # A blank current entry means the engine dropped the URLs during
+        # deserialization, leaving history unusable.
+        restored = self._history.currentItem().url()
+        if restored != url and restored.toString() in ('', 'about:blank'):
+            log.webview.warning(
+                "History restore produced a blank entry - falling back to "
+                "URL-only restore.")
+            self._load_items_workaround(items)
+            return
 
         @pyqtSlot()
         def _on_load_finished():
