@@ -13,7 +13,7 @@ from collections.abc import MutableSequence
 
 from qutebrowser.qt import machinery
 from qutebrowser.qt.core import (pyqtBoundSignal, pyqtSlot, QRect, QPoint, QTimer, Qt,
-                          QCoreApplication, QEventLoop, QByteArray)
+                          QCoreApplication, QEvent, QEventLoop, QByteArray, QObject)
 from qutebrowser.qt.widgets import QWidget, QVBoxLayout, QSizePolicy
 from qutebrowser.qt.gui import QPalette
 
@@ -102,6 +102,67 @@ def get_target_window():
 
 
 _OverlayInfoType = tuple[QWidget, pyqtBoundSignal, bool, str]
+
+
+class _WindowOcclusionWatcher(QObject):
+
+    """Treat the current tab of a fully covered window as hidden.
+
+    Tab switches hide the old tab's widget, which propagates to page
+    visibility - but covering the whole window generates no widget events,
+    and on Wayland only the window handle's exposure state changes. Watch
+    Expose events and mirror them onto the current tab's page visibility so
+    the usual lifecycle handling applies to it while the window is covered.
+    """
+
+    def __init__(self, window: 'MainWindow') -> None:
+        super().__init__(window)
+        self._window = window
+        self._occluded = False
+        self._installed = False
+        window.tabbed_browser.widget.currentChanged.connect(
+            self._on_current_changed)
+
+    def install(self) -> None:
+        """Start watching the window handle, once it exists."""
+        if self._installed:
+            return
+        handle = self._window.windowHandle()
+        if handle is not None:
+            handle.installEventFilter(self)
+            self._installed = True
+            self._update()
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.Expose:
+            self._update()
+        return False
+
+    def _update(self) -> None:
+        handle = self._window.windowHandle()
+        if handle is None:
+            return
+        occluded = not handle.isExposed()
+        if occluded == self._occluded:
+            return
+        self._occluded = occluded
+        tab = self._window.tabbed_browser.widget.currentWidget()
+        if tab is None:
+            return
+        log.webview.debug(f"Window {self._window.win_id} occlusion changed, "
+                          f"setting current tab's page visibility to {not occluded}")
+        tab.set_page_visibility(not occluded)
+
+    @pyqtSlot(int)
+    def _on_current_changed(self, _index: int) -> None:
+        # The old tab's widget was hidden by the tab switch, so its page is
+        # already invisible; the new current tab inherits the window's
+        # occlusion state instead of starting out visible.
+        if not self._occluded:
+            return
+        tab = self._window.tabbed_browser.widget.currentWidget()
+        if tab is not None:
+            tab.set_page_visibility(False)
 
 
 class MainWindow(QWidget):
@@ -240,6 +301,8 @@ class MainWindow(QWidget):
 
         self._add_widgets()
         self._downloadview.show()
+
+        self._occlusion_watcher = _WindowOcclusionWatcher(self)
 
         self._init_completion()
 
@@ -630,6 +693,7 @@ class MainWindow(QWidget):
         """
         super().showEvent(e)
         objreg.register('last-visible-main-window', self, update=True)
+        self._occlusion_watcher.install()
 
     def _confirm_quit(self):
         """Confirm that this window should be closed.
