@@ -1740,6 +1740,14 @@ class WebEngineTab(browsertab.AbstractTab):
         else:
             selection.selectNone()
 
+    def discard_supported(self) -> bool:
+        """Check if we can safely discard tabs."""
+        # Real discards deadlock the UI vs IO thread over the GIL during
+        # compositor teardown on QtWebEngine < 6.11, fixed by Chromium
+        # 140's skipped wait (#8826).
+        return (version.qtwebengine_versions().webengine >=
+                utils.VersionNumber(6, 11))
+
     def _schedule_lifecycle_transition(
         self,
         state: Optional[QWebEnginePage.LifecycleState] = None,
@@ -1762,6 +1770,13 @@ class WebEngineTab(browsertab.AbstractTab):
                 config.instance.get('content.lifecycle.discard_delay', url=url),
             ),
         }
+
+        if (state == QWebEnginePage.LifecycleState.Discarded and
+                not self.discard_supported()):
+            # Leave the tab frozen instead (see discard_supported for why).
+            log.webview.debug(
+                f"Not scheduling discard on QtWebEngine < 6.11 for {self}")
+            state = None
 
         to_start = delay = None
         if state is not None:
