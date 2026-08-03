@@ -451,6 +451,26 @@ Feature: Saving and loading sessions
     When I run :session-load inexistent_session
     Then the error "Session inexistent_session not found!" should be shown
 
+  # https://github.com/qutebrowser/qutebrowser/issues/5359
+  Scenario: Back/forward history survives a session save/load round trip
+    When I open data/numbers/1.txt
+    And I open data/numbers/2.txt
+    And I run :session-save history_roundtrip
+    And I run :session-load --clear history_roundtrip
+    And I wait until data/numbers/2.txt is loaded
+    And I run :back
+    And I wait until data/numbers/1.txt is loaded
+    Then the session should look like:
+      """
+      windows:
+        - tabs:
+            - history:
+              - url: about:blank
+              - active: true
+                url: http://localhost:*/data/numbers/1.txt
+              - url: http://localhost:*/data/numbers/2.txt
+      """
+
 
   # Test load/save of pinned tabs
 

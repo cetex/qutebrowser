@@ -4,6 +4,8 @@
 
 """QWebHistory serializer for QtWebEngine."""
 
+import struct
+
 from qutebrowser.qt.core import QByteArray, QDataStream, QIODevice, QUrl
 
 from qutebrowser.utils import qtutils
@@ -48,8 +50,15 @@ def _serialize_item(item, stream):
     stream.writeQString(item.title)
 
     ## QByteArray(encodedPageState.data(), encodedPageState.size());
-    # \xff\xff\xff\xff
-    qtutils.serialize_stream(stream, QByteArray())
+    # Chromium PageState in its version -1 form: a base::Pickle (uint32
+    # payload size, then little-endian writes padded to 4 bytes) containing
+    # only the version and a length-prefixed URL. It sets the restored
+    # entry's URL; all other PageState fields keep their defaults.
+    spec = bytes(item.url.toEncoded())
+    payload = struct.pack('<i', -1) + struct.pack('<I', len(spec)) + spec
+    payload += b'\x00' * (-len(payload) % 4)
+    page_state = struct.pack('<I', len(payload)) + payload
+    qtutils.serialize_stream(stream, QByteArray(page_state))
 
     ## static_cast<qint32>(entry->GetTransitionType());
     # chromium/ui/base/page_transition_types.h
