@@ -248,6 +248,31 @@ class TestWebEnginePermissions:
         assert clipboard in permissions_cls._messages
 
 
+@pytest.fixture
+def set_state_mock(
+    webengine_tab: 'webenginetab.WebEngineTab',
+    monkeypatch,
+    mocker,
+):
+    set_state_mock = mocker.Mock()
+    monkeypatch.setattr(
+        webengine_tab._widget.page(),
+        "setLifecycleState",
+        set_state_mock,
+    )
+    return set_state_mock
+
+
+@pytest.fixture
+def webengine_version(monkeypatch):
+    """Get a function to pin the QtWebEngine version webenginetab sees."""
+    def run(ver):
+        monkeypatch.setattr(
+            webenginetab.version, 'qtwebengine_versions',
+            lambda avoid_init=False: version.WebEngineVersions.from_pyqt(ver))
+    return run
+
+
 class TestPageLifecycle:
 
     @pytest.fixture(autouse=True)
@@ -258,20 +283,10 @@ class TestPageLifecycle:
         if versions.webengine < utils.VersionNumber(6, 5):
             pytest.skip("Lifecycle feature requires Webengine 6.5+")
 
-    @pytest.fixture
-    def set_state_mock(
-        self,
-        webengine_tab: webenginetab.WebEngineTab,
-        monkeypatch,
-        mocker,
-    ):
-        set_state_mock = mocker.Mock()
-        monkeypatch.setattr(
-            webengine_tab._widget.page(),
-            "setLifecycleState",
-            set_state_mock,
-        )
-        return set_state_mock
+    @pytest.fixture(autouse=True)
+    def default_webengine_version(self, webengine_version):
+        """Default to a discard-capable engine (#8826 gate is < 6.11)."""
+        webengine_version('6.11')
 
     @pytest.fixture(autouse=True)
     def set_config_defaults(
@@ -351,6 +366,37 @@ class TestPageLifecycle:
         with qtbot.wait_signal(timer.timeout, timeout=100):
             pass
         set_state_mock.assert_called_once_with(new_state)
+
+    def test_no_discard_on_old_webengine(
+        self,
+        webengine_tab: webenginetab.WebEngineTab,
+        webengine_version,
+        config_stub,
+    ):
+        """Discards are never scheduled on QtWebEngine < 6.11 (#8826)."""
+        webengine_version('6.10')
+        self.set_config(config_stub, discard_delay=10)
+
+        webengine_tab._on_recommended_state_changed(
+            QWebEnginePage.LifecycleState.Discarded)
+
+        assert not webengine_tab._lifecycle_timer_discard.isActive()
+
+    @pytest.mark.parametrize('qt_version, expected', [
+        ('6.10', False),
+        ('6.11', True),
+        ('6.12', True),
+    ])
+    def test_discard_supported(
+        self,
+        webengine_tab: webenginetab.WebEngineTab,
+        webengine_version,
+        qt_version,
+        expected,
+    ):
+        """Discarding is only supported where the #8826 hang can't happen."""
+        webengine_version(qt_version)
+        assert webengine_tab.discard_supported() == expected
 
     def test_state_disabled(
         self,

@@ -1127,6 +1127,10 @@ content.lifecycle.discard_delay:
     to disable. Frees resources by discarding the browser context and
     renderer. Page must be frozen before it can be discarded.
 
+    On QtWebEngine < 6.11 discarding is never scheduled regardless of this
+    setting, because it can permanently deadlock the browser there (see
+    qutebrowser#8826); tabs stay frozen instead.
+
 content.local_content_can_access_remote_urls:
   default: false
   type: Bool
