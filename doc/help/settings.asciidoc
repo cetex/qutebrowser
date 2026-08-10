@@ -177,7 +177,7 @@
 |<<content.javascript.log_message.levels,content.javascript.log_message.levels>>|Javascript message sources/levels to show in the qutebrowser UI.
 |<<content.javascript.modal_dialog,content.javascript.modal_dialog>>|Use the standard JavaScript modal dialog for `alert()` and `confirm()`.
 |<<content.javascript.prompt,content.javascript.prompt>>|Show javascript prompts.
-|<<content.lifecycle.discard_delay,content.lifecycle.discard_delay>>|Delay (in milliseconds) before discarding the page, reloads on focus. -1 to disable. Frees resources by discarding the browser context and renderer. Page must be frozen before it can be discarded.
+|<<content.lifecycle.discard_delay,content.lifecycle.discard_delay>>|Delay (in milliseconds) before discarding the page, reloads on focus. -1 to disable. Frees resources by discarding the browser context and renderer. Page must be frozen before it can be discarded. A URL-specific -1 also exempts matching tabs from `qute://back` placeholders at session restore.
 |<<content.lifecycle.enabled,content.lifecycle.enabled>>|Use the lifecycle state (freeze/discard) for each page recommended by QtWebEngine (Chromium), after the delays configured in `content.lifecycle.freeze_delay` and `content.lifecycle.discard_delay`.
 |<<content.lifecycle.freeze_delay,content.lifecycle.freeze_delay>>|Delay (in milliseconds) before freezing the page, resumes on focus. -1 to disable. Stops javascript execution, rendering and event processing.
 |<<content.local_content_can_access_file_urls,content.local_content_can_access_file_urls>>|Allow locally loaded documents to access other local URLs.
@@ -2462,7 +2462,7 @@ Default: +pass:[true]+
 
 [[content.lifecycle.discard_delay]]
 === content.lifecycle.discard_delay
-Delay (in milliseconds) before discarding the page, reloads on focus. -1 to disable. Frees resources by discarding the browser context and renderer. Page must be frozen before it can be discarded.
+Delay (in milliseconds) before discarding the page, reloads on focus. -1 to disable. Frees resources by discarding the browser context and renderer. Page must be frozen before it can be discarded. A URL-specific -1 also exempts matching tabs from `qute://back` placeholders at session restore.
 On QtWebEngine < 6.11 discarding is never scheduled regardless of this setting, because it can permanently deadlock the browser there (see qutebrowser#8826); tabs stay frozen instead.
 
 This setting supports link:configuring{outfilesuffix}#patterns[URL patterns].
@@ -4168,6 +4168,7 @@ Default: empty
 [[session.lazy_restore]]
 === session.lazy_restore
 Load a restored tab as soon as it takes focus.
+Background tabs restore non-running instead: discarded where content.lifecycle discarding is enabled and the engine supports it, or via a `qute://back` placeholder otherwise. Sites with content.lifecycle.enabled set to false are exempted and restore running.
 
 Type: <<types,Bool>>
 

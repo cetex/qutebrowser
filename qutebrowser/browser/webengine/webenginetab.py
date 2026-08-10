@@ -655,14 +655,15 @@ class WebEngineHistoryPrivate(browsertab.AbstractHistoryPrivate):
 
         self._tab.load_url(url)
 
-    def load_items(self, items):
+    def load_items(self, items, discard=False):
         """Load session items via QWebEngineHistory deserialization."""
         if not items:
             return
         # serialize() validates that there is exactly one active item.
         stream, _data, cur_data = tabhistory.serialize(items)
         url = next(item.url for item in items if item.active)
-        self._tab.before_load_started.emit(url)
+        if not discard:
+            self._tab.before_load_started.emit(url)
         qtutils.deserialize_stream(stream, self._history)
 
         # A blank current entry means the engine dropped the URLs during
@@ -673,6 +674,15 @@ class WebEngineHistoryPrivate(browsertab.AbstractHistoryPrivate):
                 "History restore produced a blank entry - falling back to "
                 "URL-only restore.")
             self._load_items_workaround(items)
+            return
+
+        if discard:
+            # Discard aborts the load deserialization just started; the
+            # history survives.
+            self._tab.set_page_visibility(False)
+            # pylint: disable=protected-access
+            self._tab._set_lifecycle_state(
+                QWebEnginePage.LifecycleState.Discarded)
             return
 
         @pyqtSlot()
@@ -1445,6 +1455,9 @@ class WebEngineTab(browsertab.AbstractTab):
         """Set the lifecycle state of the current tab."""
         log.webview.debug(f"Setting page lifecycle state of {self} to {new_state}")
         self._widget.page().setLifecycleState(new_state)
+
+    def set_page_visibility(self, visible: bool) -> None:
+        self._widget.page().setVisible(visible)
 
     def _show_error_page(self, url, error):
         """Show an error page in the tab."""

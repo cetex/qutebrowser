@@ -660,7 +660,7 @@ class WebKitHistoryPrivate(browsertab.AbstractHistoryPrivate):
     def deserialize(self, data):
         qtutils.deserialize(data, self._history)
 
-    def load_items(self, items):
+    def load_items(self, items, discard=False):
         if items:
             self._tab.before_load_started.emit(items[-1].url)
 
