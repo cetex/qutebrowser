@@ -26,7 +26,7 @@ from qutebrowser.browser.webengine import (webview, webengineelem, tabhistory,
 from qutebrowser.utils import (usertypes, qtutils, log, javascript, utils,
                                resources, message, jinja, debug, version, urlutils)
 from qutebrowser.qt import sip, machinery
-from qutebrowser.misc import objects, miscwidgets
+from qutebrowser.misc import objects, miscwidgets, sessions
 
 
 # Mapping worlds from usertypes.JsWorld to QWebEngineScript world IDs.
@@ -1338,7 +1338,7 @@ class WebEngineTab(browsertab.AbstractTab):
         self._lifecycle_timer_freeze.timeout.connect(functools.partial(self._set_lifecycle_state, QWebEnginePage.LifecycleState.Frozen))
         self._lifecycle_timer_discard = usertypes.Timer(self)
         self._lifecycle_timer_discard.setSingleShot(True)
-        self._lifecycle_timer_discard.timeout.connect(functools.partial(self._set_lifecycle_state, QWebEnginePage.LifecycleState.Discarded))
+        self._lifecycle_timer_discard.timeout.connect(self._do_discard)
 
         # WORKAROUND for https://bugreports.qt.io/browse/QTBUG-65223
         self._needs_qtbug65223_workaround = (
@@ -1767,6 +1767,32 @@ class WebEngineTab(browsertab.AbstractTab):
         return (version.qtwebengine_versions().webengine >=
                 utils.VersionNumber(6, 11))
 
+    def _do_discard(self) -> None:
+        """Discard the tab, or fall back to a qute://back stub if unsafe.
+
+        Unlike load_url()/setUrl(), splicing keeps the forward history,
+        but every entry loses its scroll/form state, since the rebuilt
+        history only carries a URL-only PageState (see tabhistory.py).
+        """
+        if self.discard_supported():
+            self._set_lifecycle_state(QWebEnginePage.LifecycleState.Discarded)
+            return
+
+        current = self.history.current_item().url()
+        if current.scheme() == 'qute' and current.host() == 'back':
+            # Already stub-discarded; a repeat recommendedState signal
+            # shouldn't reload for nothing.
+            return
+
+        items = [
+            sessions.TabHistoryItem(
+                url=item.url(), original_url=item.originalUrl(),
+                title=item.title(), last_visited=item.lastVisited())
+            for item in self.history
+        ]
+        sessions.inject_back_stub(items, self.history.current_idx())
+        self.history.private_api.load_items(items)
+
     def _schedule_lifecycle_transition(
         self,
         state: Optional[QWebEnginePage.LifecycleState] = None,
@@ -1789,13 +1815,6 @@ class WebEngineTab(browsertab.AbstractTab):
                 config.instance.get('content.lifecycle.discard_delay', url=url),
             ),
         }
-
-        if (state == QWebEnginePage.LifecycleState.Discarded and
-                not self.discard_supported()):
-            # Leave the tab frozen instead (see discard_supported for why).
-            log.webview.debug(
-                f"Not scheduling discard on QtWebEngine < 6.11 for {self}")
-            state = None
 
         to_start = delay = None
         if state is not None:
