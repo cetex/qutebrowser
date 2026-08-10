@@ -407,16 +407,27 @@ class TestInjectBackStub:
 
 class TestLoadTab:
 
-    """Tests for SessionManager._load_tab."""
+    """Tests for SessionManager._load_tab.
+
+    A tab that isn't unloaded returns its entries for deferred loading
+    (see _run_deferred_loads) instead of loading them synchronously.
+    """
 
     def test_no_history(self, sess_man, config_stub, fake_tab):
-        sess_man._load_tab(fake_tab, {'history': []})
-        assert fake_tab.history.private_api.loaded_items == []
+        entries = sess_man._load_tab(fake_tab, {'history': []})
+        assert entries == []
+        assert fake_tab.history.private_api.loaded_items is None
 
     def test_load_fail(self, sess_man, config_stub, fake_tab):
+        """A stub/discard load failure raises synchronously, unlike a
+        deferred one (see TestRunDeferredLoads)."""
+        config_stub.val.session.lazy_restore = True
         fake_tab.history.private_api.raise_error = ValueError
+        data = {'history': [
+            {'url': 'https://example.com/', 'title': 'foo', 'active': True},
+        ]}
         with pytest.raises(sessions.SessionError):
-            sess_man._load_tab(fake_tab, {'history': []})
+            sess_man._load_tab(fake_tab, data)
 
     def test_pinned(self, sess_man, config_stub, fake_tab):
         data = {'history': [
@@ -454,27 +465,29 @@ class TestLoadTab:
             {'url': 'https://example.com/', 'title': 'foo', 'active': True},
         ]}
 
-        sess_man._load_tab(fake_tab, data)
+        entries = sess_man._load_tab(fake_tab, data)
 
-        assert len(fake_tab.history.private_api.loaded_items) == 1
+        assert len(entries) == 1
+        assert fake_tab.history.private_api.loaded_items is None
 
     def test_no_active_entry_lazy_restore_no_crash(self, sess_man,
                                                    config_stub, fake_tab):
         """#7696: a saved history can have no entry marked active (e.g. an
         invalid current URL at save time). Combined with lazy_restore, the
         per-tab decision must not crash looking up the (nonexistent) active
-        entry; it should just load the tab normally.
+        entry; it should just return the entries for a normal, deferred
+        load.
         """
         config_stub.val.session.lazy_restore = True
         data = {'history': [
             {'url': 'https://example.com/', 'title': 'foo'},
         ]}
 
-        sess_man._load_tab(fake_tab, data)
+        entries = sess_man._load_tab(fake_tab, data)
 
-        items = fake_tab.history.private_api.loaded_items
-        assert len(items) == 1
-        assert not items[0].active
+        assert len(entries) == 1
+        assert not entries[0].active
+        assert fake_tab.history.private_api.loaded_items is None
 
 
 @pytest.fixture
@@ -495,18 +508,23 @@ class TestLoadTabDiscardMode:
             {'url': url, 'title': 'foo', 'active': True},
         ]}
 
-    def _assert_outcome(self, tab, outcome):
+    def _assert_outcome(self, tab, entries, outcome):
         items = tab.history.private_api.loaded_items
         discarded = tab.history.private_api.loaded_discarded_items
         if outcome == 'stub':
+            assert entries is None
             assert len(items) == 2
             assert items[1].url.toString() == 'qute://back#foo'
             assert discarded is None
         elif outcome == 'discard':
+            assert entries is None
             assert items is None
             assert len(discarded) == 1
         elif outcome == 'normal':
-            assert len(items) == 1
+            # Loaded normally means deferred: the entries are returned for
+            # the caller to load, not written to the tab synchronously.
+            assert len(entries) == 1
+            assert items is None
             assert discarded is None
 
     @pytest.mark.parametrize(
@@ -547,9 +565,9 @@ class TestLoadTabDiscardMode:
             config_stub.set_obj(name, value, pattern=pattern)
         tab = FakeTab(discard_supported=discard_supported)
 
-        sess_man._load_tab(tab, self._data(active=focused))
+        entries = sess_man._load_tab(tab, self._data(active=focused))
 
-        self._assert_outcome(tab, outcome)
+        self._assert_outcome(tab, entries, outcome)
 
     def test_default_config_still_stubs(self, sess_man, config_stub):
         """Pinned regression test: default config still stubs.
@@ -562,16 +580,131 @@ class TestLoadTabDiscardMode:
         config_stub.val.session.lazy_restore = True
         tab = FakeTab(discard_supported=True)
 
-        sess_man._load_tab(tab, self._data(active=False))
+        entries = sess_man._load_tab(tab, self._data(active=False))
 
-        self._assert_outcome(tab, 'stub')
+        self._assert_outcome(tab, entries, 'stub')
 
     def test_empty_history_loads_normally(self, sess_man, discard_mode_config):
         tab = FakeTab(discard_supported=True)
 
-        sess_man._load_tab(tab, {'active': False, 'history': []})
+        entries = sess_man._load_tab(tab, {'active': False, 'history': []})
 
-        assert tab.history.private_api.loaded_items == []
+        assert entries == []
+        assert tab.history.private_api.loaded_items is None
+
+
+class FakeCurrentTabChanged:
+
+    """A fake for TabbedBrowser.current_tab_changed (connect/disconnect
+    only, no real Qt signal machinery)."""
+
+    def __init__(self):
+        self._slot = None
+
+    def connect(self, slot):
+        self._slot = slot
+
+    def disconnect(self, slot):
+        assert slot is self._slot
+        self._slot = None
+
+    def emit(self, tab):
+        self._slot(tab)
+
+
+class FakeTabbedBrowser:
+
+    def __init__(self):
+        self.current_tab_changed = FakeCurrentTabChanged()
+
+
+class TestRunDeferredLoads:
+
+    """Tests for SessionManager._run_deferred_loads."""
+
+    @pytest.fixture(autouse=True)
+    def immediate_timer(self, monkeypatch):
+        """Run queued loads right away instead of waiting out the delay."""
+        monkeypatch.setattr(sessions.QTimer, 'singleShot',
+                            lambda _ms, func: func())
+        monkeypatch.setattr(sessions.sip, 'isdeleted', lambda _tab: False)
+
+    def test_priority_order(self, sess_man):
+        """The focused tab (priority 0) loads before the rest, which load
+        in their original tab order."""
+        tabs = [FakeTab() for _ in range(3)]
+        pending = [(1, 1, tabs[1], ['b']), (0, 0, tabs[0], ['a']),
+                  (1, 2, tabs[2], ['c'])]
+        pending.sort(key=lambda entry: entry[:2])
+
+        sess_man._run_deferred_loads(FakeTabbedBrowser(), pending)
+
+        assert tabs[0].history.private_api.loaded_items == ['a']
+        assert tabs[1].history.private_api.loaded_items == ['b']
+        assert tabs[2].history.private_api.loaded_items == ['c']
+
+    def test_failed_load_logs_and_continues(self, sess_man, caplog):
+        bad_tab = FakeTab()
+        bad_tab.history.private_api.raise_error = ValueError('boom')
+        good_tab = FakeTab()
+        pending = [(0, 0, bad_tab, ['x']), (1, 1, good_tab, ['y'])]
+
+        with caplog.at_level(logging.ERROR):
+            sess_man._run_deferred_loads(FakeTabbedBrowser(), pending)
+
+        assert good_tab.history.private_api.loaded_items == ['y']
+        assert caplog.messages == ['Deferred session load failed: boom']
+
+    def test_deleted_tab_skipped(self, sess_man, monkeypatch):
+        deleted_tab = FakeTab()
+        good_tab = FakeTab()
+        monkeypatch.setattr(sessions.sip, 'isdeleted',
+                            lambda tab: tab is deleted_tab)
+        pending = [(0, 0, deleted_tab, ['x']), (1, 1, good_tab, ['y'])]
+
+        sess_man._run_deferred_loads(FakeTabbedBrowser(), pending)
+
+        assert deleted_tab.history.private_api.loaded_items is None
+        assert good_tab.history.private_api.loaded_items == ['y']
+
+    def test_focus_jump_loads_immediately(self, sess_man, monkeypatch):
+        """Switching to a tab still in the queue loads it right away,
+        ahead of its turn; the chain still drains what's left after."""
+        scheduled = []
+        monkeypatch.setattr(sessions.QTimer, 'singleShot',
+                            lambda _ms, func: scheduled.append(func))
+        tabs = [FakeTab() for _ in range(3)]
+        pending = [(0, 0, tabs[0], ['a']), (1, 1, tabs[1], ['b']),
+                  (1, 2, tabs[2], ['c'])]
+        tabbed_browser = FakeTabbedBrowser()
+
+        sess_man._run_deferred_loads(tabbed_browser, pending)
+        tabbed_browser.current_tab_changed.emit(tabs[2])
+        assert tabs[1].history.private_api.loaded_items is None
+        scheduled.pop(0)()  # let the chain's pending tick run
+
+        assert tabs[0].history.private_api.loaded_items == ['a']
+        assert tabs[2].history.private_api.loaded_items == ['c']
+        assert tabs[1].history.private_api.loaded_items == ['b']
+
+    def test_focus_jump_empties_queue_before_chain_tick(self, sess_man,
+                                                        monkeypatch):
+        """The chain's already-scheduled tick may fire after a focus jump
+        has drained the rest of the queue; it should just disconnect."""
+        scheduled = []
+        monkeypatch.setattr(sessions.QTimer, 'singleShot',
+                            lambda _ms, func: scheduled.append(func))
+        tabs = [FakeTab() for _ in range(2)]
+        pending = [(0, 0, tabs[0], ['a']), (1, 1, tabs[1], ['b'])]
+        tabbed_browser = FakeTabbedBrowser()
+
+        sess_man._run_deferred_loads(tabbed_browser, pending)
+        tabbed_browser.current_tab_changed.emit(tabs[1])
+        scheduled.pop(0)()  # the pending tick finds an empty queue
+
+        assert tabs[0].history.private_api.loaded_items == ['a']
+        assert tabs[1].history.private_api.loaded_items == ['b']
+        assert tabbed_browser.current_tab_changed._slot is None
 
 
 class TestListSessions:

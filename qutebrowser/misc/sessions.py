@@ -447,14 +447,18 @@ class SessionManager(QObject):
         return entries, active_idx, pinned
 
     def _load_tab(self, new_tab, data):
-        """Load yaml data into a newly opened tab."""
+        """Load yaml data into a newly opened tab.
+
+        Return:
+            Entries for the caller to load (deferred), or None if the tab
+            was already loaded as a stub or set up discarded.
+        """
         entries, active_idx, pinned = self._build_history_entries(data)
         new_tab.data.pinned = pinned
 
         if active_idx is not None:
             new_tab.title_changed.emit(entries[active_idx].title)
 
-        use_discard = False
         if (config.val.session.lazy_restore and
                 not data.get('active', False) and
                 active_idx is not None):
@@ -470,11 +474,53 @@ class SessionManager(QObject):
                 use_discard = new_tab.discard_supported() and discard_allowed
                 if not use_discard:
                     inject_back_stub(entries, active_idx)
+                try:
+                    new_tab.history.private_api.load_items(
+                        entries, discard=use_discard)
+                except ValueError as e:
+                    raise SessionError(e)
+                return None
 
-        try:
-            new_tab.history.private_api.load_items(entries, discard=use_discard)
-        except ValueError as e:
-            raise SessionError(e)
+        return entries
+
+    def _run_deferred_loads(self, tabbed_browser, pending_loads):
+        """Load restored tabs one at a time, focused tab first.
+
+        Switching to a tab still in the queue loads it right away,
+        instead of waiting for its turn.
+        """
+        queue = list(pending_loads)
+
+        def _load_next():
+            while queue:
+                _prio, _idx, tab, entries = queue.pop(0)
+                if sip.isdeleted(tab):
+                    continue
+                try:
+                    tab.history.private_api.load_items(entries)
+                except ValueError as e:
+                    log.sessions.error(
+                        "Deferred session load failed: {}".format(e))
+                    continue
+                if queue:
+                    # Give the just-loaded tab a moment before the next one.
+                    QTimer.singleShot(250, _load_next)
+                    return
+            tabbed_browser.current_tab_changed.disconnect(_on_focus_change)
+
+        def _on_focus_change(tab):
+            for i, (_prio, _idx, queued_tab, entries) in enumerate(queue):
+                if queued_tab is tab:
+                    queue.pop(i)
+                    try:
+                        tab.history.private_api.load_items(entries)
+                    except ValueError as e:
+                        log.sessions.error(
+                            "Deferred session load failed: {}".format(e))
+                    return
+
+        tabbed_browser.current_tab_changed.connect(_on_focus_change)
+        _load_next()
 
     def _load_window(self, win):
         """Turn yaml data into windows."""
@@ -483,15 +529,21 @@ class SessionManager(QObject):
         tabbed_browser = objreg.get('tabbed-browser', scope='window',
                                     window=window.win_id)
         tab_to_focus = None
+        pending_loads = []
         for i, tab in enumerate(win['tabs']):
             new_tab = tabbed_browser.tabopen(background=False)
-            self._load_tab(new_tab, tab)
+            entries = self._load_tab(new_tab, tab)
             if tab.get('active', False):
                 tab_to_focus = i
             if new_tab.data.pinned:
                 new_tab.set_pinned(True)
+            if entries is not None:
+                prio = 0 if tab.get('active', False) else 1
+                pending_loads.append((prio, i, new_tab, entries))
         if tab_to_focus is not None:
             tabbed_browser.widget.setCurrentIndex(tab_to_focus)
+        pending_loads.sort(key=lambda entry: entry[:2])
+        self._run_deferred_loads(tabbed_browser, pending_loads)
 
         window.show()
         if win.get('active', False):
