@@ -6,12 +6,11 @@
 
 import os
 import os.path
-import itertools
 import urllib
 import shutil
 import pathlib
 from typing import Any, Optional, Union, cast
-from collections.abc import Iterable, MutableMapping, MutableSequence
+from collections.abc import Iterable, MutableMapping
 
 from qutebrowser.qt.core import Qt, QUrl, QObject, QPoint, QTimer, QDateTime
 import yaml
@@ -120,6 +119,19 @@ class TabHistoryItem:
                               original_url=self.original_url, title=self.title,
                               active=self.active, user_data=self.user_data,
                               last_visited=self.last_visited)
+
+
+def inject_back_stub(items, idx):
+    """Mark items[idx] inactive and splice a qute://back stub after it.
+
+    No-op if items[idx] is already a qute://back stub.
+    """
+    if items[idx].url.scheme() == 'qute' and items[idx].url.host() == 'back':
+        return
+    items[idx].active = False
+    items.insert(idx + 1, TabHistoryItem(
+        QUrl('qute://back#' + urllib.parse.quote(items[idx].title)),
+        items[idx].title, active=True))
 
 
 class SessionManager(QObject):
@@ -374,21 +386,18 @@ class SessionManager(QObject):
         """Temporarily save the session for the last closed window."""
         self._last_window_session = self._save_all()
 
-    def _load_tab(self, new_tab, data):  # noqa: C901
-        """Load yaml data into a newly opened tab."""
-        entries = []
-        lazy_load: MutableSequence[_JsonType] = []
-        # use len(data['history'])
-        # -> dropwhile empty if not session.lazy_session
-        lazy_index = len(data['history'])
-        gen = itertools.chain(
-            itertools.takewhile(lambda _: not lazy_load,
-                                enumerate(data['history'])),
-            enumerate(lazy_load),
-            itertools.dropwhile(lambda i: i[0] < lazy_index,
-                                enumerate(data['history'])))
+    def _build_history_entries(self, data):
+        """Build TabHistoryItems for a tab's saved history.
 
-        for i, histentry in gen:
+        Return:
+            A (entries, active_idx, pinned) tuple; active_idx is None if no
+            entry in the data was marked active.
+        """
+        entries = []
+        active_idx = None
+        pinned = False
+
+        for i, histentry in enumerate(data['history']):
             user_data = {}
 
             if 'zoom' in data:
@@ -410,21 +419,7 @@ class SessionManager(QObject):
                 user_data['scroll-pos'] = QPoint(pos['x'], pos['y'])
 
             if 'pinned' in histentry:
-                new_tab.data.pinned = histentry['pinned']
-
-            if (config.val.session.lazy_restore and
-                    histentry.get('active', False) and
-                    not histentry['url'].startswith('qute://back')):
-                # remove "active" mark and insert back page marked as active
-                lazy_index = i + 1
-                lazy_load.append({
-                    'title': histentry['title'],
-                    'url':
-                        'qute://back#' +
-                        urllib.parse.quote(histentry['title']),
-                    'active': True
-                })
-                histentry['active'] = False
+                pinned = histentry['pinned']
 
             active = histentry.get('active', False)
             url = QUrl.fromEncoded(histentry['url'].encode('ascii'))
@@ -443,13 +438,23 @@ class SessionManager(QObject):
             else:
                 last_visited = None
 
-            entry = TabHistoryItem(url=url, original_url=orig_url,
-                                   title=histentry['title'], active=active,
-                                   user_data=user_data,
-                                   last_visited=last_visited)
-            entries.append(entry)
+            entries.append(TabHistoryItem(
+                url=url, original_url=orig_url, title=histentry['title'],
+                active=active, user_data=user_data, last_visited=last_visited))
             if active:
-                new_tab.title_changed.emit(histentry['title'])
+                active_idx = i
+
+        return entries, active_idx, pinned
+
+    def _load_tab(self, new_tab, data):
+        """Load yaml data into a newly opened tab."""
+        entries, active_idx, pinned = self._build_history_entries(data)
+        new_tab.data.pinned = pinned
+
+        if active_idx is not None:
+            new_tab.title_changed.emit(entries[active_idx].title)
+            if config.val.session.lazy_restore:
+                inject_back_stub(entries, active_idx)
 
         try:
             new_tab.history.private_api.load_items(entries)

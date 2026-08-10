@@ -9,7 +9,6 @@ import logging
 import pytest
 import yaml
 from qutebrowser.qt.core import QUrl, QPoint, QByteArray, QObject
-QWebView = pytest.importorskip('qutebrowser.qt.webkitwidgets').QWebView
 
 from qutebrowser.misc import sessions
 from qutebrowser.misc.sessions import TabHistoryItem as Item
@@ -251,54 +250,73 @@ class TestSave:
             history.itemAt(i).setUserData(data)
 
 
-class FakeWebView:
+class FakeHistoryPrivate:
 
-    """A QWebView fake which provides a "page" with a load_history method.
-
-    Attributes:
-        loaded_history: The history which has been loaded by load_history, or
-                        None.
-        raise_error: The exception to raise on load_history, or None.
-    """
+    """A fake for AbstractHistoryPrivate, recording what got loaded."""
 
     def __init__(self):
-        self.loaded_history = None
+        self.loaded_items = None
         self.raise_error = None
 
-    def page(self):
-        return self
-
-    def load_history(self, data):
-        self.loaded_history = data
+    def load_items(self, items):
         if self.raise_error is not None:
             raise self.raise_error
+        self.loaded_items = items
+
+
+class FakeHistory:
+
+    def __init__(self):
+        self.private_api = FakeHistoryPrivate()
+
+
+class FakeSignal:
+
+    def __init__(self):
+        self.emitted = []
+
+    def emit(self, *args):
+        self.emitted.append(args)
+
+
+class FakeTabData:
+
+    def __init__(self):
+        self.pinned = False
+
+
+class FakeTab:
+
+    """A tab fake matching the new_tab API _load_tab actually uses."""
+
+    def __init__(self):
+        self.data = FakeTabData()
+        self.title_changed = FakeSignal()
+        self.history = FakeHistory()
 
 
 @pytest.fixture
-def fake_webview():
-    return FakeWebView()
+def fake_tab():
+    return FakeTab()
 
 
-@webengine_refactoring_xfail
-class TestLoadTab:
+class TestBuildHistoryEntries:
 
-    def test_no_history(self, sess_man, fake_webview):
-        sess_man._load_tab(fake_webview, {'history': []})
-        assert fake_webview.loaded_history == []
+    """Tests for SessionManager._build_history_entries."""
 
-    def test_load_fail(self, sess_man, fake_webview):
-        fake_webview.raise_error = ValueError
-        with pytest.raises(sessions.SessionError):
-            sess_man._load_tab(fake_webview, {'history': []})
+    def test_no_history(self, sess_man):
+        entries, active_idx, pinned = sess_man._build_history_entries(
+            {'history': []})
+        assert entries == []
+        assert active_idx is None
+        assert pinned is False
 
     @pytest.mark.parametrize('key, val, expected', [
         ('zoom', 1.23, 1.23),
         ('scroll-pos', {'x': 23, 'y': 42}, QPoint(23, 42)),
     ])
     @pytest.mark.parametrize('in_main_data', [True, False])
-    def test_user_data(self, sess_man, fake_webview, key, val, expected,
-                       in_main_data):
-
+    def test_user_data(self, sess_man, key, val, expected, in_main_data):
         item = {'url': 'http://www.example.com/', 'title': 'foo'}
 
         if in_main_data:
@@ -310,12 +328,12 @@ class TestLoadTab:
             item[key] = val
             d = {'history': [item]}
 
-        sess_man._load_tab(fake_webview, d)
-        assert len(fake_webview.loaded_history) == 1
-        assert fake_webview.loaded_history[0].user_data[key] == expected
+        entries, _active_idx, _pinned = sess_man._build_history_entries(d)
+        assert len(entries) == 1
+        assert entries[0].user_data[key] == expected
 
     @pytest.mark.parametrize('original_url', ['http://example.org/', None])
-    def test_urls(self, sess_man, fake_webview, original_url):
+    def test_urls(self, sess_man, original_url):
         url = 'http://www.example.com/'
         item = {'url': url, 'title': 'foo'}
 
@@ -325,13 +343,112 @@ class TestLoadTab:
             item['original-url'] = original_url
             expected = QUrl(original_url)
 
-        d = {'history': [item]}
+        entries, _active_idx, _pinned = sess_man._build_history_entries(
+            {'history': [item]})
+        assert len(entries) == 1
+        assert entries[0].url == QUrl(url)
+        assert entries[0].original_url == expected
 
-        sess_man._load_tab(fake_webview, d)
-        assert len(fake_webview.loaded_history) == 1
-        loaded_item = fake_webview.loaded_history[0]
-        assert loaded_item.url == QUrl(url)
-        assert loaded_item.original_url == expected
+    def test_active_idx(self, sess_man):
+        data = {'history': [
+            {'url': 'https://example.com/', 'title': 'foo'},
+            {'url': 'https://example.org/', 'title': 'bar', 'active': True},
+        ]}
+        entries, active_idx, _pinned = sess_man._build_history_entries(data)
+        assert active_idx == 1
+        assert entries[active_idx].url == QUrl('https://example.org/')
+
+    def test_no_active_entry(self, sess_man):
+        data = {'history': [
+            {'url': 'https://example.com/', 'title': 'foo'},
+        ]}
+        _entries, active_idx, _pinned = sess_man._build_history_entries(data)
+        assert active_idx is None
+
+    def test_pinned_last_entry_wins(self, sess_man):
+        data = {'history': [
+            {'url': 'https://example.com/', 'title': 'foo', 'pinned': True},
+            {'url': 'https://example.org/', 'title': 'bar', 'pinned': False},
+        ]}
+        _entries, _active_idx, pinned = sess_man._build_history_entries(data)
+        assert pinned is False
+
+
+class TestInjectBackStub:
+
+    """Tests for sessions.inject_back_stub."""
+
+    def test_splices_after_active_entry(self):
+        items = [Item(QUrl('https://example.com/'), 'foo', active=True)]
+
+        sessions.inject_back_stub(items, 0)
+
+        assert not items[0].active
+        assert items[1].active
+        assert items[1].url == QUrl('qute://back#foo')
+        assert items[1].title == 'foo'
+
+    def test_noop_if_already_stub(self):
+        items = [Item(QUrl('qute://back#foo'), 'foo', active=True)]
+
+        sessions.inject_back_stub(items, 0)
+
+        assert len(items) == 1
+        assert items[0].active
+
+
+class TestLoadTab:
+
+    """Tests for SessionManager._load_tab."""
+
+    def test_no_history(self, sess_man, fake_tab):
+        sess_man._load_tab(fake_tab, {'history': []})
+        assert fake_tab.history.private_api.loaded_items == []
+
+    def test_load_fail(self, sess_man, fake_tab):
+        fake_tab.history.private_api.raise_error = ValueError
+        with pytest.raises(sessions.SessionError):
+            sess_man._load_tab(fake_tab, {'history': []})
+
+    def test_pinned(self, sess_man, fake_tab):
+        data = {'history': [
+            {'url': 'https://example.com/', 'title': 'foo', 'pinned': True},
+        ]}
+        sess_man._load_tab(fake_tab, data)
+        assert fake_tab.data.pinned is True
+
+    def test_active_entry_emits_title_changed(self, sess_man, config_stub,
+                                              fake_tab):
+        data = {'history': [
+            {'url': 'https://example.com/', 'title': 'foo', 'active': True},
+        ]}
+        sess_man._load_tab(fake_tab, data)
+        assert fake_tab.title_changed.emitted == [('foo',)]
+
+    def test_lazy_restore_inserts_back_stub(self, sess_man, config_stub,
+                                            fake_tab):
+        config_stub.val.session.lazy_restore = True
+        data = {'history': [
+            {'url': 'https://example.com/', 'title': 'foo', 'active': True},
+        ]}
+
+        sess_man._load_tab(fake_tab, data)
+
+        items = fake_tab.history.private_api.loaded_items
+        assert len(items) == 2
+        assert not items[0].active
+        assert items[1].active
+        assert items[1].url == QUrl('qute://back#foo')
+
+    def test_lazy_restore_off_no_stub(self, sess_man, config_stub, fake_tab):
+        config_stub.val.session.lazy_restore = False
+        data = {'history': [
+            {'url': 'https://example.com/', 'title': 'foo', 'active': True},
+        ]}
+
+        sess_man._load_tab(fake_tab, data)
+
+        assert len(fake_tab.history.private_api.loaded_items) == 1
 
 
 class TestListSessions:
