@@ -10,7 +10,7 @@ import itertools
 import functools
 import dataclasses
 from typing import (cast, TYPE_CHECKING, Any, Optional, Union)
-from collections.abc import Iterable, Sequence, Callable
+from collections.abc import Iterator, Sequence, Callable
 
 from qutebrowser.qt import machinery
 from qutebrowser.qt.core import (pyqtSignal, pyqtSlot, QUrl, QObject, QSizeF, Qt,
@@ -720,7 +720,7 @@ class AbstractHistory:
     def __len__(self) -> int:
         raise NotImplementedError
 
-    def __iter__(self) -> Iterable[Union['QWebHistoryItem', 'QWebEngineHistoryItem']]:
+    def __iter__(self) -> Iterator[Union['QWebHistoryItem', 'QWebEngineHistoryItem']]:
         raise NotImplementedError
 
     def _check_count(self, count: int) -> None:

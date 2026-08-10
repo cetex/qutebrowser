@@ -460,10 +460,11 @@ class TestLoadTab:
 
     def test_no_active_entry_lazy_restore_no_crash(self, sess_man,
                                                    config_stub, fake_tab):
-        """#7696: a saved history can have no entry marked active (e.g. an
-        invalid current URL at save time). Combined with lazy_restore, the
-        per-tab decision must not crash looking up the (nonexistent) active
-        entry; it should just load the tab normally.
+        """#7696: a saved history can have no entry marked active (e.g. an invalid current URL at save time).
+
+        Combined with lazy_restore, the per-tab decision must not crash
+        looking up the (nonexistent) active entry; it should just load the
+        tab normally.
         """
         config_stub.val.session.lazy_restore = True
         data = {'history': [

@@ -13,8 +13,10 @@ QWebEnginePage = QtWebEngineCore.QWebEnginePage
 QWebEngineScriptCollection = QtWebEngineCore.QWebEngineScriptCollection
 QWebEngineScript = QtWebEngineCore.QWebEngineScript
 
+from qutebrowser.qt.core import QUrl
 from qutebrowser.browser import greasemonkey
 from qutebrowser.utils import usertypes, utils, version
+from qutebrowser.misc import sessions
 webenginetab = pytest.importorskip(
     "qutebrowser.browser.webengine.webenginetab")
 
@@ -367,20 +369,34 @@ class TestPageLifecycle:
             pass
         set_state_mock.assert_called_once_with(new_state)
 
-    def test_no_discard_on_old_webengine(
+    def test_stub_fallback_on_old_webengine(
         self,
         webengine_tab: webenginetab.WebEngineTab,
         webengine_version,
+        set_state_mock,
         config_stub,
+        qtbot,
     ):
-        """Discards are never scheduled on QtWebEngine < 6.11 (#8826)."""
+        """On QtWebEngine < 6.11, the discard timer still schedules, but firing it falls back to a stub instead of a real discard (#8826)."""
         webengine_version('6.10')
         self.set_config(config_stub, discard_delay=10)
+        entries = [
+            sessions.TabHistoryItem(url=QUrl('https://example.com/'),
+                                    title='Example', active=True),
+        ]
+        webengine_tab.history.private_api.load_items(entries, discard=True)
+        set_state_mock.reset_mock()  # seeding itself triggers a discard call
 
         webengine_tab._on_recommended_state_changed(
             QWebEnginePage.LifecycleState.Discarded)
+        assert webengine_tab._lifecycle_timer_discard.isActive()
 
-        assert not webengine_tab._lifecycle_timer_discard.isActive()
+        with qtbot.wait_signal(webengine_tab._lifecycle_timer_discard.timeout):
+            pass
+
+        set_state_mock.assert_not_called()
+        current_url = webengine_tab.history.current_item().url().toString()
+        assert current_url.startswith('qute://back#')
 
     @pytest.mark.parametrize('qt_version, expected', [
         ('6.10', False),
@@ -452,3 +468,86 @@ class TestPageLifecycle:
         with qtbot.wait_signal(discard_timer.timeout):
             pass
         set_state_mock.assert_called_once_with(QWebEnginePage.LifecycleState.Discarded)
+
+
+class TestDoDiscard:
+
+    """Tests for WebEngineTab._do_discard()."""
+
+    @pytest.fixture(autouse=True)
+    def check_version(self):
+        # While the lifecycle feature was introduced in 5.14, PyQt seems to
+        # have trouble connecting to the signal we require on 6.4 and prior.
+        # https://github.com/qutebrowser/qutebrowser/pull/8547#issuecomment-2890997662
+        if versions.webengine < utils.VersionNumber(6, 5):
+            pytest.skip("Lifecycle feature requires Webengine 6.5+")
+
+    @pytest.fixture(autouse=True)
+    def default_webengine_version(self, webengine_version):
+        """Default to a discard-capable engine (#8826 gate is < 6.11)."""
+        webengine_version('6.11')
+
+    @pytest.fixture
+    def seeded_tab(self, webengine_tab: webenginetab.WebEngineTab):
+        """A tab with a 3-entry history, seeded without any navigation.
+
+        load_items() deserializes synchronously into the tab's real
+        QWebEngineHistory, so no event loop or network access is needed.
+        """
+        entries = [
+            sessions.TabHistoryItem(url=QUrl('https://a.example/'), title='A'),
+            sessions.TabHistoryItem(url=QUrl('https://b.example/'), title='B',
+                                    active=True),
+            sessions.TabHistoryItem(url=QUrl('https://c.example/'), title='C'),
+        ]
+        webengine_tab.history.private_api.load_items(entries, discard=True)
+        assert webengine_tab.history.current_idx() == 1
+        return webengine_tab
+
+    def test_real_discard_when_supported(self, seeded_tab, set_state_mock):
+        """When the engine supports it, discard the page directly and leave the history untouched."""
+        set_state_mock.reset_mock()  # seeding itself triggers a discard call
+
+        seeded_tab._do_discard()
+
+        set_state_mock.assert_called_once_with(
+            QWebEnginePage.LifecycleState.Discarded)
+        current_url = seeded_tab.history.current_item().url().toString()
+        assert current_url == 'https://b.example/'
+
+    def test_splices_stub_after_current_entry(self, seeded_tab,
+                                              webengine_version):
+        webengine_version('6.10')
+        seeded_tab._do_discard()
+
+        urls = [item.url().toString() for item in seeded_tab.history]
+        assert urls == [
+            'https://a.example/',
+            'https://b.example/',
+            'qute://back#B',
+            'https://c.example/',
+        ]
+
+    def test_marks_stub_active_and_preserves_forward_history(
+            self, seeded_tab, webengine_version):
+        webengine_version('6.10')
+        seeded_tab._do_discard()
+
+        assert seeded_tab.history.current_idx() == 2
+        assert (seeded_tab.history.current_item().url().toString() ==
+                'qute://back#B')
+        # The entry that was ahead of the discarded one is still there,
+        # untouched, at the tail of the history.
+        items = list(seeded_tab.history)
+        assert items[3].url().toString() == 'https://c.example/'
+
+    def test_noop_if_already_stub_discarded(self, seeded_tab,
+                                            webengine_version, mocker):
+        webengine_version('6.10')
+        seeded_tab._do_discard()
+        load_items_mock = mocker.patch.object(
+            seeded_tab.history.private_api, 'load_items')
+
+        seeded_tab._do_discard()
+
+        load_items_mock.assert_not_called()
