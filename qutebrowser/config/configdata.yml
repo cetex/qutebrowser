@@ -128,7 +128,14 @@ session.default_name:
 session.lazy_restore:
   type: Bool
   default: false
-  desc: Load a restored tab as soon as it takes focus.
+  desc: >-
+    Load a restored tab as soon as it takes focus.
+
+    Background tabs restore non-running instead: discarded where
+    content.lifecycle discarding is enabled and the engine supports it, or
+    via a `qute://back` placeholder otherwise. Sites with
+    content.lifecycle.enabled set to false are exempted and restore
+    running.
 
 backend:
   type:
@@ -1125,7 +1132,9 @@ content.lifecycle.discard_delay:
   desc: >-
     Delay (in milliseconds) before discarding the page, reloads on focus. -1
     to disable. Frees resources by discarding the browser context and
-    renderer. Page must be frozen before it can be discarded.
+    renderer. Page must be frozen before it can be discarded. A
+    URL-specific -1 also exempts matching tabs from `qute://back`
+    placeholders at session restore.
 
     On QtWebEngine < 6.11 discarding is never scheduled regardless of this
     setting, because it can permanently deadlock the browser there (see

@@ -453,11 +453,26 @@ class SessionManager(QObject):
 
         if active_idx is not None:
             new_tab.title_changed.emit(entries[active_idx].title)
-            if config.val.session.lazy_restore:
-                inject_back_stub(entries, active_idx)
+
+        use_discard = False
+        if (config.val.session.lazy_restore and
+                not data.get('active', False) and
+                active_idx is not None):
+            url = entries[active_idx].url
+            # Prefer discard over qute://back and allow per-url bypass.
+            # Skips lazy_restore if url-pattern discard_delay = -1 (ignores
+            # global that's -1 by default via fallback=False) or enabled=False.
+            if (config.instance.get('content.lifecycle.enabled', url=url) and
+                config.instance.get('content.lifecycle.discard_delay', url=url,
+                                    fallback=False) != -1):
+                discard_allowed = config.instance.get(
+                    'content.lifecycle.discard_delay', url=url) != -1
+                use_discard = new_tab.discard_supported() and discard_allowed
+                if not use_discard:
+                    inject_back_stub(entries, active_idx)
 
         try:
-            new_tab.history.private_api.load_items(entries)
+            new_tab.history.private_api.load_items(entries, discard=use_discard)
         except ValueError as e:
             raise SessionError(e)
 

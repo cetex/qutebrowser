@@ -702,7 +702,8 @@ class AbstractHistoryPrivate:
         """Deserialize from a format produced by self.serialize."""
         raise NotImplementedError
 
-    def load_items(self, items: Sequence[sessions.TabHistoryItem]) -> None:
+    def load_items(self, items: Sequence[sessions.TabHistoryItem],
+                   discard: bool = False) -> None:
         """Deserialize from a list of TabHistoryItems."""
         raise NotImplementedError
 
@@ -1297,6 +1298,13 @@ class AbstractTab(QWidget):
     def set_pinned(self, pinned: bool) -> None:
         self.data.pinned = pinned
         self.pinned_changed.emit(pinned)
+
+    def set_page_visibility(self, visible: bool) -> None:
+        """Tell the page whether it is visible to the user; a no-op if unsupported."""
+
+    def discard_supported(self) -> bool:
+        """Whether this tab can safely enter the discarded lifecycle state."""
+        return False
 
     def renderer_process_pid(self) -> Optional[int]:
         """Get the PID of the underlying renderer process.

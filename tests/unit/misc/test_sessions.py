@@ -12,7 +12,7 @@ from qutebrowser.qt.core import QUrl, QPoint, QByteArray, QObject
 
 from qutebrowser.misc import sessions
 from qutebrowser.misc.sessions import TabHistoryItem as Item
-from qutebrowser.utils import objreg, qtutils
+from qutebrowser.utils import objreg, qtutils, urlmatch
 from qutebrowser.browser.webkit import tabhistory
 
 
@@ -256,12 +256,16 @@ class FakeHistoryPrivate:
 
     def __init__(self):
         self.loaded_items = None
+        self.loaded_discarded_items = None
         self.raise_error = None
 
-    def load_items(self, items):
+    def load_items(self, items, discard=False):
         if self.raise_error is not None:
             raise self.raise_error
-        self.loaded_items = items
+        if discard:
+            self.loaded_discarded_items = items
+        else:
+            self.loaded_items = items
 
 
 class FakeHistory:
@@ -289,10 +293,14 @@ class FakeTab:
 
     """A tab fake matching the new_tab API _load_tab actually uses."""
 
-    def __init__(self):
+    def __init__(self, discard_supported=False):
         self.data = FakeTabData()
         self.title_changed = FakeSignal()
         self.history = FakeHistory()
+        self._discard_supported = discard_supported
+
+    def discard_supported(self):
+        return self._discard_supported
 
 
 @pytest.fixture
@@ -401,16 +409,16 @@ class TestLoadTab:
 
     """Tests for SessionManager._load_tab."""
 
-    def test_no_history(self, sess_man, fake_tab):
+    def test_no_history(self, sess_man, config_stub, fake_tab):
         sess_man._load_tab(fake_tab, {'history': []})
         assert fake_tab.history.private_api.loaded_items == []
 
-    def test_load_fail(self, sess_man, fake_tab):
+    def test_load_fail(self, sess_man, config_stub, fake_tab):
         fake_tab.history.private_api.raise_error = ValueError
         with pytest.raises(sessions.SessionError):
             sess_man._load_tab(fake_tab, {'history': []})
 
-    def test_pinned(self, sess_man, fake_tab):
+    def test_pinned(self, sess_man, config_stub, fake_tab):
         data = {'history': [
             {'url': 'https://example.com/', 'title': 'foo', 'pinned': True},
         ]}
@@ -449,6 +457,121 @@ class TestLoadTab:
         sess_man._load_tab(fake_tab, data)
 
         assert len(fake_tab.history.private_api.loaded_items) == 1
+
+    def test_no_active_entry_lazy_restore_no_crash(self, sess_man,
+                                                   config_stub, fake_tab):
+        """#7696: a saved history can have no entry marked active (e.g. an
+        invalid current URL at save time). Combined with lazy_restore, the
+        per-tab decision must not crash looking up the (nonexistent) active
+        entry; it should just load the tab normally.
+        """
+        config_stub.val.session.lazy_restore = True
+        data = {'history': [
+            {'url': 'https://example.com/', 'title': 'foo'},
+        ]}
+
+        sess_man._load_tab(fake_tab, data)
+
+        items = fake_tab.history.private_api.loaded_items
+        assert len(items) == 1
+        assert not items[0].active
+
+
+@pytest.fixture
+def discard_mode_config(config_stub):
+    """A config_stub with lazy_restore and content.lifecycle discarding on."""
+    config_stub.val.session.lazy_restore = True
+    config_stub.val.content.lifecycle.enabled = True
+    config_stub.val.content.lifecycle.discard_delay = 500
+    return config_stub
+
+
+class TestLoadTabDiscardMode:
+
+    """Tests for _load_tab's per-tab normal/stub/discard decision."""
+
+    def _data(self, active=False, url='https://example.com/'):
+        return {'active': active, 'history': [
+            {'url': url, 'title': 'foo', 'active': True},
+        ]}
+
+    def _assert_outcome(self, tab, outcome):
+        items = tab.history.private_api.loaded_items
+        discarded = tab.history.private_api.loaded_discarded_items
+        if outcome == 'stub':
+            assert len(items) == 2
+            assert items[1].url.toString() == 'qute://back#foo'
+            assert discarded is None
+        elif outcome == 'discard':
+            assert items is None
+            assert len(discarded) == 1
+        elif outcome == 'normal':
+            assert len(items) == 1
+            assert discarded is None
+
+    @pytest.mark.parametrize(
+        'enabled, discard_delay, discard_supported, focused, '
+        'pattern_override, outcome', [
+            # Default config (discard_delay=-1) stubs, never eager-discards.
+            (True, -1, True, False, None, 'stub'),
+            # A background tab is discarded once discarding is configured.
+            (True, 500, True, False, None, 'discard'),
+            # The focused tab always loads normally, never discarded.
+            (True, 500, True, True, None, 'normal'),
+            # A per-URL override disabling the lifecycle exempts the tab.
+            (True, 500, True, False,
+             ('content.lifecycle.enabled', False), 'normal'),
+            # Lifecycle disabled globally loads every tab normally too.
+            (False, 500, True, False, None, 'normal'),
+            # WebKit (discard_supported=False) always stubs, never discards.
+            (True, 500, False, False, None, 'stub'),
+            # A per-URL discard_delay=-1 exempts the tab entirely (no
+            # discard, no stub), uniformly regardless of engine support.
+            (True, 500, True, False,
+             ('content.lifecycle.discard_delay', -1), 'normal'),
+            (True, 500, False, False,
+             ('content.lifecycle.discard_delay', -1), 'normal'),
+        ],
+        ids=['default', 'background-discard', 'focused', 'url-exempted',
+             'disabled-globally', 'discard-unsupported',
+             'url-discard-delay-capable', 'url-discard-delay-legacy'])
+    def test_decision_matrix(self, sess_man, config_stub, enabled,
+                             discard_delay, discard_supported, focused,
+                             pattern_override, outcome):
+        config_stub.val.session.lazy_restore = True
+        config_stub.val.content.lifecycle.enabled = enabled
+        config_stub.val.content.lifecycle.discard_delay = discard_delay
+        if pattern_override is not None:
+            name, value = pattern_override
+            pattern = urlmatch.UrlPattern('https://example.com/*')
+            config_stub.set_obj(name, value, pattern=pattern)
+        tab = FakeTab(discard_supported=discard_supported)
+
+        sess_man._load_tab(tab, self._data(active=focused))
+
+        self._assert_outcome(tab, outcome)
+
+    def test_default_config_still_stubs(self, sess_man, config_stub):
+        """Pinned regression test: default config still stubs.
+
+        This has regressed three times: the global discard_delay default
+        is -1, the same value that also means "exempt" as a URL pattern -
+        they must not collapse into the same case. Untouched defaults plus
+        lazy_restore must keep producing the qute://back stub.
+        """
+        config_stub.val.session.lazy_restore = True
+        tab = FakeTab(discard_supported=True)
+
+        sess_man._load_tab(tab, self._data(active=False))
+
+        self._assert_outcome(tab, 'stub')
+
+    def test_empty_history_loads_normally(self, sess_man, discard_mode_config):
+        tab = FakeTab(discard_supported=True)
+
+        sess_man._load_tab(tab, {'active': False, 'history': []})
+
+        assert tab.history.private_api.loaded_items == []
 
 
 class TestListSessions:
