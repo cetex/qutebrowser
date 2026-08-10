@@ -1136,9 +1136,8 @@ content.lifecycle.discard_delay:
     URL-specific -1 also exempts matching tabs from `qute://back`
     placeholders at session restore.
 
-    On QtWebEngine < 6.11 discarding is never scheduled regardless of this
-    setting, because it can permanently deadlock the browser there (see
-    qutebrowser#8826); tabs stay frozen instead.
+    Uses navigation to qute://back (minimal placeholder) on QtWebEngine <
+    6.11 due to risk of deadlocks during discards (see qutebrowser#8826).
 
 content.local_content_can_access_remote_urls:
   default: false
