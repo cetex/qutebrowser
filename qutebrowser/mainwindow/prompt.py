@@ -13,7 +13,7 @@ from typing import Optional, cast
 from collections.abc import MutableSequence
 
 from qutebrowser.qt.core import (pyqtSlot, pyqtSignal, Qt, QTimer, QDir, QModelIndex,
-                          QItemSelectionModel, QObject, QEventLoop, QUrl)
+                          QItemSelectionModel, QObject, QUrl)
 from qutebrowser.qt.widgets import (QWidget, QGridLayout, QVBoxLayout, QLineEdit,
                              QLabel, QTreeView, QSizePolicy,
                              QSpacerItem, QFileIconProvider)
@@ -174,8 +174,7 @@ class PromptQueue(QObject):
             question.completed.connect(loop.quit)
             question.completed.connect(loop.deleteLater)
             log.prompt.debug("Starting loop.exec() for {}".format(question))
-            flags = QEventLoop.ProcessEventsFlag.ExcludeSocketNotifiers
-            loop.exec(flags)
+            loop.exec()
             log.prompt.debug("Ending loop.exec() for {}".format(question))
 
             log.prompt.debug("Restoring old question {}".format(old_question))
