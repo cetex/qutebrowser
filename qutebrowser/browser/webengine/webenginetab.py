@@ -14,6 +14,7 @@ from typing import cast, Union, Optional
 
 from qutebrowser.qt.core import (pyqtSignal, pyqtSlot, Qt, QPoint, QPointF, QUrl,
                           QObject, QByteArray, QTimer)
+from qutebrowser.qt.gui import QIcon
 from qutebrowser.qt.network import QAuthenticator
 from qutebrowser.qt.webenginecore import QWebEnginePage, QWebEngineScript, QWebEngineHistory
 
@@ -1310,6 +1311,7 @@ class WebEngineTab(browsertab.AbstractTab):
         self._scripts = _WebEngineScripts(tab=self, parent=self)
         # We're assigning settings in _set_widget
         self.settings = webenginesettings.WebEngineSettings(settings=None)
+        self._icon = QIcon()
         self._set_widget(widget)
         self._connect_signals()
         self.backend = usertypes.Backend.QtWebEngine
@@ -1422,7 +1424,11 @@ class WebEngineTab(browsertab.AbstractTab):
         return page.renderProcessPid()
 
     def icon(self):
-        return self._widget.icon()
+        # WORKAROUND for QtWebEngine <= 6.11 crashing in
+        # WebContentsAdapter::icon() with a null FaviconDriverQt if the tab was
+        # discarded at some point. Use cached icon instead (updated on
+        # iconChanged).
+        return self._icon
 
     def set_html(self, html, base_url=QUrl()):
         # FIXME:qtwebengine
@@ -1525,6 +1531,12 @@ class WebEngineTab(browsertab.AbstractTab):
         self.search.clear()
         super()._on_load_started()
         self.data.netrc_used = False
+
+    @pyqtSlot(QIcon)
+    def _on_icon_changed(self, icon):
+        """Cache the icon before passing it on, see icon()."""
+        self._icon = icon
+        self.icon_changed.emit(icon)
 
     @pyqtSlot('qint64')
     def _on_renderer_process_pid_changed(self, pid):
@@ -1838,7 +1850,7 @@ class WebEngineTab(browsertab.AbstractTab):
         view.urlChanged.connect(self._on_url_changed)
         view.renderProcessTerminated.connect(
             self._on_render_process_terminated)
-        view.iconChanged.connect(self.icon_changed)
+        view.iconChanged.connect(self._on_icon_changed)
 
         page.loadFinished.connect(self._on_history_trigger)
         page.loadFinished.connect(self._restore_zoom)
