@@ -9,6 +9,8 @@ env:
   FORCE_COLOR: "1"
   PY_COLORS: "1"
   MYPY_FORCE_TERMINAL_WIDTH: "180"
+  # Resume truncated PyPI downloads of the large PyQt wheels (needs pip >= 25.1)
+  PIP_RESUME_RETRIES: "5"
 
 jobs:
   linters:
